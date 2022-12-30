@@ -1,0 +1,127 @@
+#!/bin/sh
+
+display_usage() {
+  echo "Usage: $0 [--help] [--provider defichain|mydefichain] [--network mainnet|testnet] [--snapshot SNAPSHOT] [--region europe|asia]\n"
+  echo "  --help:     Display this help message"
+  echo "  --provider: Accepts only 'defichain' or 'mydefichain'. Defaults to 'defichain'"
+  echo "  --network:  Accepts only 'mainnet' or 'testnet'. Defaults to 'mainnet'"
+  #echo "  --snapshot: Accepts a string which is either a number or a string ending in '.zip'"
+  echo "  --region:   Accepts only 'europe' or 'asia'. Can only be set if provider is 'defichain'. Defaults to 'europe'"
+  echo
+  echo "Example: $0 --provider mydefichain --network testnet"
+}
+
+provider="defichain"
+network="mainnet"
+snapshot=""
+region="europe"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help)
+      display_usage
+      exit 0
+      ;;
+    --provider)
+      shift
+      if [[ "$1" != "defichain" && "$1" != "mydefichain" ]]; then
+        echo "Error: Invalid provider. Provider must be either defichain or mydefichain."
+        exit 1
+      fi
+      provider="$1"
+      ;;
+    --network)
+      shift
+      if [[ "$provider" == "defichain" ]]; then
+        echo "Error: Network can only be set if provider is mydefichain. Use --provider 'mydefichain'"
+        exit 1
+      fi
+      if [[ "$1" != "mainnet" && "$1" != "testnet" ]]; then
+        echo "Error: Invalid network. Network must be either mainnet or testnet."
+        exit 1
+      fi
+      network="$1"
+      ;;
+    #--snapshot)
+    #  shift
+    #  if [[ ! "$1" =~ ^[0-9]+$ ]] && [[ ! "$1" =~ \.zip$ ]]; then
+    #    echo "Error: Invalid snapshot. Snapshot must be a number or a string ending in '.zip'."
+    #    exit 1
+    #  fi
+    #  snapshot="$1"
+    #  ;;
+    --region)
+      shift
+      if [[ "$provider" == "mydefichain" ]]; then
+        echo "Error: Region can only be set if provider is defichain."
+        exit 1
+      fi
+      if [[ "$1" != "europe" && "$1" != "asia" ]]; then
+        echo "Error: Invalid region. Region must be either europe or asia."
+        exit 1
+      fi
+      region="$1"
+      ;;
+    *)
+      echo "Error: Invalid argument $1"
+      display_usage
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+# Initialize script
+BASE_URL="https://snapshot-de.mydefichain.com"
+if [[ $network == "testnet" ]]; then
+    BASE_URL="https://testnet.snapshot-de.mydefichain.com"
+fi
+if [[ $provider == "defichain" ]]; then
+    if [[ $region == "europe" ]]; then
+        BASE_URL="https://defi-snapshots-europe.s3.eu-central-1.amazonaws.com"
+    else 
+        BASE_URL="https://defi-snapshots.s3-ap-southeast-1.amazonaws.com"
+    fi
+
+fi
+
+TMP_LIST_FILE=$(mktemp)
+echo "Temporary file created $TMP_LIST_FILE"
+
+# Download de snapshot list from url into temporary file
+INDEX_URL=$BASE_URL"/index.txt"
+echo "Downloading list of snapshot from: $BASE_URL/index.txt ..."
+STATUS_RECEIVED=$(curl -s --write-out "%{http_code}\n" $INDEX_URL --output $TMP_LIST_FILE --silent)
+echo "Status: $STATUS_RECEIVED"
+if [ $STATUS_RECEIVED != "200" ]
+then
+    >&2 echo "ERROR: Unable to fetch snapshot list from $INDEX_URL
+Error status: $STATUS_RECEIVED
+Error message: $(cat $TMP_LIST_FILE | xmllint --format -)"
+    rm $TMP_LIST_FILE
+    exit
+fi
+echo "Snapshot list fetched successfully."
+
+if [ ! -f "$TMP_LIST_FILE" ]; then
+    echo "Error reading $TMP_LIST_FILE"
+    exit
+fi
+SNAPSHOT_NAME=$(tail -n 1 $TMP_LIST_FILE)
+rm $TMP_LIST_FILE
+echo "Target snapshot: $SNAPSHOT_NAME"
+SNAPSHOT_URL="$BASE_URL/$SNAPSHOT_NAME"
+
+echo "Downloading latest snapshot from $SNAPSHOT_URL"
+STATUS_RECEIVED=$(curl --write-out "%{http_code}\n" -O "$SNAPSHOT_URL")
+
+if [[ $STATUS_RECEIVED != "200" ]]; then
+    >&2 echo "ERROR: Unable to fetch snapshot $SNAPSHOT_NAME
+Error status: $STATUS_RECEIVED
+Error message: $(cat $TMP_LIST_FILE | xmllint --format -)"
+    rm $TMP_LIST_FILE
+    exit
+fi
+
+echo "Snapshot downloaded to $(pwd)/$SNAPSHOT_NAME"
